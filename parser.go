@@ -711,6 +711,85 @@ func Delete(data []byte, keys ...string) []byte {
 	return data
 }
 
+func DeleteUnsafe(data []byte, keys ...string) []byte {
+	lk := len(keys)
+	if lk == 0 {
+		return data[:0]
+	}
+
+	array := false
+	if len(keys[lk-1]) > 0 && string(keys[lk-1][0]) == "[" {
+		array = true
+	}
+
+	var startOffset, keyOffset int
+	endOffset := len(data)
+	var err error
+	if !array {
+		if len(keys) > 1 {
+			_, _, startOffset, endOffset, err = internalGet(data, keys[:lk-1]...)
+			if err == KeyPathNotFoundError {
+				// problem parsing the data
+				return data
+			}
+		}
+
+		keyOffset, err = findKeyStart(data[startOffset:endOffset], keys[lk-1])
+		if err == KeyPathNotFoundError {
+			// problem parsing the data
+			return data
+		}
+		keyOffset += startOffset
+		_, _, _, subEndOffset, _ := internalGet(data[startOffset:endOffset], keys[lk-1])
+		endOffset = startOffset + subEndOffset
+		tokEnd := tokenEnd(data[endOffset:])
+		tokStart := findTokenStart(data[:keyOffset], ","[0])
+
+		if data[endOffset+tokEnd] == ","[0] {
+			endOffset += tokEnd + 1
+		} else if data[endOffset+tokEnd] == " "[0] && len(data) > endOffset+tokEnd+1 && data[endOffset+tokEnd+1] == ","[0] {
+			endOffset += tokEnd + 2
+		} else if data[endOffset+tokEnd] == "}"[0] && data[tokStart] == ","[0] {
+			keyOffset = tokStart
+		}
+	} else {
+		_, _, keyOffset, endOffset, err = internalGet(data, keys...)
+		if err == KeyPathNotFoundError {
+			// problem parsing the data
+			return data
+		}
+
+		tokEnd := tokenEnd(data[endOffset:])
+		tokStart := findTokenStart(data[:keyOffset], ","[0])
+
+		if data[endOffset+tokEnd] == ","[0] {
+			endOffset += tokEnd + 1
+		} else if data[endOffset+tokEnd] == "]"[0] && data[tokStart] == ","[0] {
+			keyOffset = tokStart
+		}
+	}
+
+	// We need to remove remaining trailing comma if we delete las element in the object
+	prevTok := lastToken(data[:keyOffset])
+	remainedValue := data[endOffset:]
+
+	var newOffset int
+	if nextToken(remainedValue) > -1 && remainedValue[nextToken(remainedValue)] == '}' && data[prevTok] == ',' {
+		newOffset = prevTok
+	} else {
+		newOffset = prevTok + 1
+	}
+
+	// We have to make a copy here if we don't want to mangle the original data, because byte slices are
+	// accessed by reference and not by value
+	// dataCopy := make([]byte, len(data))
+	// copy(dataCopy, data)
+	// data = append(dataCopy[:newOffset], dataCopy[endOffset:]...)
+	data = append(data[:newOffset], data[endOffset:]...)
+
+	return data
+}
+
 /*
 
 Set - Receives existing data structure, path to set, and data to set at that key.
